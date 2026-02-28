@@ -8,46 +8,57 @@ from App_Functions import (
     draw_blocks_plotly
 )
 
-# 1. Page Config (Wide mode for better tables)
+# 1. Page Config (Force wide layout)
 st.set_page_config(page_title="Masonry Walls Design", layout="wide")
 
+# CSS to force specific styling for the report look
 st.markdown("""
 <style>
-    .reportview-container {
-        background: #f0f2f6;
+    /* Force tables to look like engineering reports */
+    table {
+        width: 100%;
+        border-collapse: collapse;
     }
-    .main-header {
-        font-size: 30px; 
-        font-weight: bold; 
-        color: #333; 
+    th {
+        background-color: #f2f2f2;
+        color: #333;
+        font-weight: bold;
+        border: 1px solid #ddd;
+        padding: 8px;
         text-align: center;
-        margin-bottom: 20px;
     }
-    .pass-tag {
+    td {
+        border: 1px solid #ddd;
+        padding: 8px;
+        text-align: center;
+    }
+    /* Status tags */
+    .pass-box {
         background-color: #d4edda;
         color: #155724;
         padding: 4px 8px;
         border-radius: 4px;
         font-weight: bold;
+        display: inline-block;
     }
-    .fail-tag {
+    .fail-box {
         background-color: #f8d7da;
         color: #721c24;
         padding: 4px 8px;
         border-radius: 4px;
         font-weight: bold;
+        display: inline-block;
     }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-header">Masonry Walls Design Tool (Out-of-Plane)</div>', unsafe_allow_html=True)
+st.title("Masonry Walls Design Tool (Out-of-Plane)")
 
 # --- SIDEBAR INPUTS ---
 with st.sidebar:
     st.header("1. Wall Properties")
     H_val = st.number_input("Wall Height (H) [m]", value=8.0, step=0.1)
     
-    # Options mapped to match your original logic
     t_map = {0.140: "140 mm", 0.190: "190 mm", 0.240: "240 mm", 0.290: "290 mm"}
     t_val = st.selectbox("Wall Thickness (t)", options=list(t_map.keys()), format_func=lambda x: t_map[x], index=2)
     
@@ -66,7 +77,7 @@ with st.sidebar:
     e_val = st.number_input("Eccentricity (e) [mm]", value=0.0, step=5.0)
     W_val = st.number_input("Wind Load (W) [kPa]", value=1.0, step=0.1)
 
-# --- MAIN LOGIC ---
+# --- CALCULATIONS ---
 
 # Units & Constants
 mm = 0.001
@@ -75,10 +86,8 @@ faim = 0.6
 fais = 0.85
 emu = 0.003
 d = t_val / 2
-# Note: In your original code, 'd' was roughly t/2. 
-# Adjust logic if 'd' is calculated differently in your real function.
 
-# 1. Run Cross Section
+# 1. Cross Section
 (t_res, beff_m_1, beff_m_2, As, Aseff_m, bg_m, bug_m_1, bug_m_2, A_gr, A_ug_1, 
  A_ug_2, Ae_1, Ae_2, fm_e_1, fm_e_2, I_gross_gr, I_gross_ug_1, I_gross_eff, 
  I_cr_eff_init, kd, n, E_m, ek, rho_SW, rho_g, rho_ug, fm_g, fm_ug, tf) = cross_section(t_val, S_val, bar_val, fblock)
@@ -95,8 +104,19 @@ pure_moment = calculate_pure_moment(faim, Aseff_m, d, fm_g, bg_m, fm_ug, tf, bug
 M_env = [0] + [PMax[-1]] + [pt[4] for pt in point2_results] + [pt[4] for pt in point3_results] + [pure_moment[4]]
 P_env = [PMax[-2]] + [PMax[-2]] + [pt[3] for pt in point2_results] + [pt[3] for pt in point3_results] + [pure_moment[3]]
 
-# 3. Factored Loads
+# 3. Factored Loads Definitions
 P_SW_mid = rho_SW * H_val / 2
+# Load combinations descriptions
+load_combos_desc = [
+    "1.4 D",
+    "1.25 D + 1.5 L",
+    "0.9 D + 1.5 L",
+    "1.25 D + Wind",
+    "0.9 D + Wind",
+    "1.25 D + 1.5 S",
+    "0.9 D + 1.5 S"
+]
+
 P_F_list_calcs = [
     1.4 * (P_DL + P_SW_mid),
     1.25 * (P_DL + P_SW_mid) + 1.5 * P_LL,
@@ -107,28 +127,26 @@ P_F_list_calcs = [
     0.9 * (P_DL + P_SW_mid) + 1.5 * P_S
 ]
 
-# 4. Icr Iteration (Copied from your logic)
+# 4. Icr Iteration
 Icr_results = []
 for pf in P_F_list_calcs:
     I_cr_val, kd_val = Icr_function(Aseff_m, d, beff_m_2, bg_m, E_m, pf, tf)
     Icr_results.append(I_cr_val)
 
-# 5. Moment Calculations
+# 5. Moment Calculations (Extracting more details this time)
 (ev, Mt_F_list, M_F_list, P_F_list, Pcr_list, Mag_list, Cm_list, EI_eff_raw, 
  EI_eff_list, betad, Min_EIeff, Max_EIeff, I_cr_array, betad_list) = Moment_Calculation(
     t_res, e_val, H_val, rho_SW, W_val, P_DL, P_LL, P_S, I_gross_eff, E_m, ek, Icr_results
 )
 
-# 6. Interpolation Logic (CRITICAL for Output Table)
-# We sort P_env to make interpolation work correctly
+# 6. Interpolation for Mr
 sorted_indices = np.argsort(P_env)
 P_env_sorted = np.array(P_env)[sorted_indices]
 M_env_sorted = np.array(M_env)[sorted_indices]
 M_interpolated = np.interp(P_F_list, P_env_sorted, M_env_sorted)
 
-# --- DISPLAY SECTION ---
+# --- VISUALS ---
 
-# Top Visuals
 c1, c2 = st.columns([1, 1])
 with c1:
     st.subheader("Wall Cross-Section")
@@ -139,74 +157,63 @@ with c2:
     fig_side = generate_side_view(H_val, P_DL, P_LL, P_S, e_val, W_val)
     st.plotly_chart(fig_side, use_container_width=True)
 
-# Interaction Diagram
 st.subheader("Interaction Diagram Checks")
 fig = go.Figure()
-# Envelope
-fig.add_trace(go.Scatter(x=M_env, y=P_env, mode="lines", name="Envelope (Resistance)", line=dict(color='black', width=3)))
-# Applied Moments (Total)
-fig.add_trace(go.Scatter(x=Mt_F_list, y=P_F_list, mode="markers", name="Mt (Applied Total)", marker=dict(color='red', size=10, symbol='circle')))
-# Applied Moments (Primary)
-fig.add_trace(go.Scatter(x=M_F_list, y=P_F_list, mode="markers", name="Mf (Primary)", marker=dict(color='blue', size=8, symbol='x')))
-
-fig.update_layout(
-    xaxis_title="Moment (kN⋅m)",
-    yaxis_title="Axial Force (kN)",
-    height=600,
-    margin=dict(l=40, r=40, t=40, b=40),
-    legend=dict(x=0.7, y=0.9)
-)
+fig.add_trace(go.Scatter(x=M_env, y=P_env, mode="lines", name="Resistance Envelope", line=dict(color='black', width=3)))
+fig.add_trace(go.Scatter(x=Mt_F_list, y=P_F_list, mode="markers", name="Applied Loads (Mt)", marker=dict(color='red', size=10, symbol='circle')))
+fig.update_layout(xaxis_title="Moment (kN⋅m)", yaxis_title="Axial Force (kN)", height=500, margin=dict(l=40, r=40, t=20, b=20))
 st.plotly_chart(fig, use_container_width=True)
 
+# --- DETAILED REPORT SECTION ---
+st.markdown("---")
+st.subheader("Detailed Design Report")
 
-# --- DETAILED OUTPUT TABLE ---
-st.subheader("Design Verification Report")
-
-# Create Data for the Table
 data_rows = []
 for i in range(len(P_F_list)):
-    pf = P_F_list[i]
-    mt = Mt_F_list[i] # Total Moment
-    mr = M_interpolated[i] # Resistance
+    # Calculate deflection (delta) roughly if not explicitly in output lists
+    # Or use Mag_list to show Magnification
     
-    # Logic from your Dash App
-    if mt < 0: # Buckling failure if Moment is negative/undefined in your logic
-         status = "❌ Buckling Fail"
-         is_safe = False
+    mt = Mt_F_list[i]
+    mr = M_interpolated[i]
+    pf = P_F_list[i]
+    
+    # Status Logic
+    if mt < 0:
+         status_html = "<span class='fail-box'>Buckling</span>"
     elif mr >= mt:
-         status = "✅ Pass"
-         is_safe = True
+         status_html = "<span class='pass-box'>Pass</span>"
     else:
-         status = "❌ Fail"
-         is_safe = False
+         status_html = "<span class='fail-box'>Fail</span>"
 
     data_rows.append({
-        "Load Case": f"Case {i+1}",
-        "Axial Load (Pf) [kN]": f"{pf:.2f}",
-        "Total Moment (Mt) [kNm]": f"{mt:.2f}",
-        "Resistance (Mr) [kNm]": f"{mr:.2f}",
-        "Result": status
+        "Load Case": f"<b>{i+1}</b><br><small>{load_combos_desc[i]}</small>",
+        "Pf (Axial)<br>[kN]": f"{pf:.2f}",
+        "Mf (Primary)<br>[kNm]": f"{M_F_list[i]:.2f}",
+        "Mt (Total)<br>[kNm]": f"<b>{mt:.2f}</b>",
+        "Mr (Resist)<br>[kNm]": f"<b>{mr:.2f}</b>",
+        "Result": status_html
     })
 
-# Convert to DataFrame
+# Convert to DF for display
 df_results = pd.DataFrame(data_rows)
 
-# Function to color code the output similar to Dash
-def color_status(val):
-    if "Pass" in val:
-        return 'color: green; font-weight: bold;'
-    else:
-        return 'color: red; font-weight: bold;'
+# Render as a HTML Table (Static, full view)
+# This mimics the "Report" feel better than the interactive dataframe
+st.markdown(
+    df_results.to_html(escape=False, index=False), 
+    unsafe_allow_html=True
+)
 
-# Apply styling
-styled_df = df_results.style.applymap(color_status, subset=['Result'])
-
-# Display
-st.dataframe(styled_df, use_container_width=True, hide_index=True)
-
-# Final Summary Box
-all_passed = all("Pass" in row["Result"] for row in data_rows)
-if all_passed:
-    st.success("### ✅ DESIGN OK: All Load Cases Passed")
-else:
-    st.error("### ❌ DESIGN FAILED: Check red Load Cases above")
+# Intermediate Data Expander
+with st.expander("See Calculation Details (Stiffness & Deflection)"):
+    st.write("Intermediate values used in the Moment Magnification method:")
+    detail_rows = []
+    for i in range(len(P_F_list)):
+        detail_rows.append({
+            "Case": f"{i+1}",
+            "EI effective [kN m²]": f"{EI_eff_list[i]:.0f}",
+            "Magnifier (δns)": f"{Mag_list[i]:.3f}",
+            "Cm": f"{Cm_list[i]:.2f}",
+            "Beta_d": f"{betad_list[i]:.2f}"
+        })
+    st.table(pd.DataFrame(detail_rows))
